@@ -8,6 +8,45 @@ from scipy import signal
 
 import pynapple as nap
 
+
+@pytest.mark.parametrize("frame", [False, True])
+@pytest.mark.parametrize("overlap", [0.0, 0.25, 0.5])
+@pytest.mark.parametrize(
+    "time_unit, interval_size", [("s", 1.0), ("ms", 1000), ("us", 1000000)]
+)
+def test_mean_psd_exactly_complete_epochs(frame, overlap, time_unit, interval_size):
+    t = np.arange(301) / 100
+    data = np.cos(2 * np.pi * 7 * t) + 0.2 * np.sin(2 * np.pi * 11 * t)
+    if frame:
+        data = np.column_stack((data, 2 * data))
+    ep = nap.IntervalSet(start=[0, 2], end=[1, 3])
+    sig = (nap.TsdFrame if frame else nap.Tsd)(t=t, d=data, time_support=ep)
+    actual = nap.compute_mean_power_spectral_density(
+        sig,
+        interval_size,
+        fs=100,
+        overlap=overlap,
+        full_range=True,
+        time_unit=time_unit,
+    )
+    estimates = []
+    for start, end in ep.values:
+        samples = data[(t >= start) & (t <= end)]
+        window = signal.windows.hamming(len(samples))
+        if frame:
+            window = window[:, None]
+        freq, power = signal.periodogram(
+            samples * window, fs=100, detrend=False, return_onesided=False, axis=0
+        )
+        estimates.append(power)
+    order = np.argsort(freq)
+    reference = np.mean(estimates, axis=0)[order]
+    np.testing.assert_allclose(actual.index.values, freq[order])
+    np.testing.assert_allclose(
+        actual.values, reference.reshape(len(freq), -1), rtol=1e-12, atol=1e-12
+    )
+
+
 ############################################################
 # Test for power_spectral_density
 ############################################################

@@ -24,7 +24,7 @@ def _overlap_split(start, end, interval_size, overlap):
     n = 0
     while k < len(start):
         t = start[k]
-        while t + interval_size < end[k]:
+        while t + interval_size <= end[k]:
             slices[n, 0] = t
             slices[n, 1] = t + interval_size
             t += (1 - overlap) * interval_size
@@ -260,6 +260,16 @@ def compute_mean_power_spectral_density(
         )
 
     split_ep = _overlap_split(ep.start, ep.end, interval_size, overlap)
+
+    # A newly included boundary window must reach its final sample. Otherwise
+    # it can shorten every FFT when the minimum slice length is chosen below.
+    boundary = np.isin(split_ep[:, 1], ep.end)
+    indices = np.searchsorted(sig.t, split_ep[:, 1])
+    has_endpoint = indices < len(sig)
+    has_endpoint[has_endpoint] = (
+        sig.t[indices[has_endpoint]] == split_ep[has_endpoint, 1]
+    )
+    split_ep = split_ep[~boundary | has_endpoint]
 
     # Get the slices of each ep
     slices = np.zeros((len(split_ep), 2), dtype=int)
