@@ -17,6 +17,11 @@ def apply_hilbert_transform(data):
     which represents the original signal plus its Hilbert transform.
     The Hilbert transform is commonly used for phase and envelope computations.
 
+    Each interval of ``time_support`` is processed independently. Each interval is
+    zero-padded to a fast FFT length, then cropped to its original length. Padding
+    can change the result near interval boundaries; samples in other intervals
+    do not affect the transform.
+
     Parameters
     ----------
     data : Tsd, TsdFrame
@@ -78,23 +83,25 @@ def apply_hilbert_transform(data):
     19.900000000000002   (0.8676441006416694+0.17871162129618953j)      (0.49718579487120196-0.09195658451657955j)
     dtype: complex128, shape: (200, 2)
     """
+    try:
+        from scipy.fft import next_fast_len
+    except ImportError:  # scipy < 1.4
+        from scipy.fftpack import next_fast_len
     from scipy.signal import hilbert
 
-    if isinstance(data, nap.Tsd):
-        return nap.Tsd(
-            d=hilbert(data.values),
-            t=data.times(),
-            time_support=data.time_support,
-        )
-    elif isinstance(data, nap.TsdFrame):
-        return nap.TsdFrame(
-            d=hilbert(data.values, axis=0),
-            t=data.times(),
-            columns=data.columns,
-            time_support=data.time_support,
-        )
-    else:
+    if not isinstance(data, (nap.Tsd, nap.TsdFrame)):
         raise TypeError("data should be a Tsd or TsdFrame.")
+
+    # Match scipy's real-to-complex dtype promotion, including integer input.
+    out = np.empty(data.shape, dtype=np.result_type(data.dtype, 1j))
+    for epoch in data.time_support:
+        slc = data.get_slice(start=epoch.start[0], end=epoch.end[0])
+        values = data.values[slc]
+        if len(values):
+            out[slc] = hilbert(values, N=next_fast_len(len(values)), axis=0)[
+                : len(values)
+            ]
+    return data._define_instance(data.t, data.time_support, values=out)
 
 
 def compute_hilbert_envelope(data):

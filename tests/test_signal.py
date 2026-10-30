@@ -354,3 +354,81 @@ def test_compute_hilbert_envelope(data):
     np.testing.assert_array_equal(data.times(), result.times())
 
     np.testing.assert_array_equal(result.values, expected)
+
+
+@pytest.mark.parametrize("frame", [False, True])
+@pytest.mark.parametrize(
+    "func",
+    [
+        nap.apply_hilbert_transform,
+        nap.compute_hilbert_envelope,
+        nap.compute_hilbert_phase,
+    ],
+)
+def test_hilbert_epochs_are_independent(frame, func):
+    times = np.concatenate([np.arange(13) / 10, 10 + np.arange(17) / 10])
+    values = np.concatenate([np.sin(np.arange(13)), np.zeros(17)])
+    epochs = nap.IntervalSet([0, 10], [1.2, 11.6])
+    if frame:
+        data = nap.TsdFrame(
+            t=times,
+            d=np.column_stack([values, 2 * values]),
+            columns=["first", "second"],
+            time_support=epochs,
+        )
+    else:
+        data = nap.Tsd(t=times, d=values, time_support=epochs)
+    result = func(data)
+    for epoch in epochs:
+        # Separately processing an epoch must not depend on another epoch.
+        expected = func(data.restrict(epoch))
+        np.testing.assert_allclose(result.restrict(epoch).values, expected.values)
+    np.testing.assert_array_equal(result.values[13:], 0)
+    np.testing.assert_array_equal(result.times(), data.times())
+    np.testing.assert_array_equal(result.time_support, epochs)
+    if frame:
+        np.testing.assert_array_equal(result.columns, data.columns)
+
+
+@pytest.mark.parametrize("dtype", [np.int16, np.float32, np.float64])
+def test_hilbert_padded_epoch_reference(dtype):
+    # The first epoch needs padding from 13 to 14 samples; the second is
+    # already a fast length. A support interval without samples is retained.
+    times = np.concatenate([np.arange(13), 30 + np.arange(16)])
+    values = np.arange(58, dtype=dtype).reshape(29, 2)[:, ::-1]
+    epochs = nap.IntervalSet([0, 20, 30], [12, 21, 45])
+    data = nap.TsdFrame(t=times, d=values, time_support=epochs, columns=["a", "b"])
+    data.set_info(location=["left", "right"])
+    # Independent discrete Fourier definition of the analytic signal.
+    expected = []
+    for chunk, length in [(values[:13], 14), (values[13:], 16)]:
+        frequencies = np.arange(length)
+        samples = np.arange(length)
+        matrix = np.exp(-2j * np.pi * frequencies[:, None] * samples / length)
+        padded = np.pad(chunk, ((0, length - len(chunk)), (0, 0)))
+        spectrum = matrix @ padded
+        multiplier = np.zeros(length)
+        multiplier[0] = multiplier[length // 2] = 1
+        multiplier[1 : length // 2] = 2
+        expected.append(
+            (matrix.conj().T @ (spectrum * multiplier[:, None]) / length)[: len(chunk)]
+        )
+    result = nap.apply_hilbert_transform(data)
+    np.testing.assert_allclose(
+        result.values, np.concatenate(expected), rtol=1e-5, atol=1e-5
+    )
+    assert result.dtype == hilbert(values, axis=0).dtype
+    np.testing.assert_array_equal(result.time_support, epochs)
+    np.testing.assert_array_equal(result.location, data.location)
+
+
+def test_hilbert_without_scipy_fft(monkeypatch):
+    import sys
+
+    from scipy.fftpack import next_fast_len
+
+    data = nap.Tsd(t=np.arange(13), d=np.arange(13, dtype=float))
+    expected = hilbert(data.values, N=next_fast_len(len(data)))[: len(data)]
+    monkeypatch.setitem(sys.modules, "scipy.fft", None)
+    result = nap.apply_hilbert_transform(data)
+    np.testing.assert_array_equal(result.values, expected)

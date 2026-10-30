@@ -2,6 +2,7 @@
 
 ### Unreleased
 
+- Hilbert transforms, envelopes and phases process each epoch independently, avoiding signal leakage across gaps. Epochs are padded to fast FFT lengths to reduce the cost of awkward signal lengths.
 
 ### 0.11.4 (2026-08-19)
 
